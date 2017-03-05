@@ -7,6 +7,7 @@
 #define FOR(i,n) for (i = 0;i < n;++i)
 #define sv static void
 typedef unsigned char u8;
+typedef unsigned long u32;
 typedef unsigned long long u64;
 
 void randombytes(u8 *x,u64 xlen) {
@@ -111,8 +112,122 @@ sv test_rfc7748_3(void) {
   assert(0 == crypto_verify_32(Bk,ek));
 }
 
+sv test_chacha20(void) {
+  char k[32] = {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f};
+  char p[113] = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip forthe future, sunscreen would be it.";
+  char n[12] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x4a,0x00,0x00,0x00,0x00};
+  char out[113] = {0};
+  assert(0 == crypto_stream_salsa20_xor(out,p,sizeof(p),n,k));
+  int i;
+  FOR(i,113) printf("%02x:", p[i]); printf("\n");
+}
+
+sv test_chacha20_1(void) {
+  unsigned char k[32] = {0};
+  unsigned char n[16] = {0};
+  unsigned char p[64] = {0};
+  unsigned char c[64] = {0};
+  int i;
+  chacha20_core(c,n,k,"expand 32-byte k",0);
+  FOR(i,sizeof(c)) printf("%02x:", c[i]); printf("\n");
+}
+
+sv test_chacha20_2(void) {
+  int i;
+  unsigned char k[32]; FOR(i,32) k[i]=i;
+  unsigned char n[16] = "\x01\x00\x00\x00\x00\x00\x00\x09\x00\x00\x00\x4a\x00\x00\x00\x00";
+  unsigned char c[64] = {0};
+  chacha20_core(c,n,k,"expand 32-byte k",0);
+  FOR(i,sizeof(c)) printf("%02x:", c[i]); printf("\n");
+}
+
+
+static u32 L32(u32 x,int c) { return (x << c) | ((x&0xffffffff) >> (32 - c)); }
+
+#define QR(a,b,c,d) {               \
+ a += b; d ^= a; d = L32(d, 16);  \
+ c += d; b ^= c; b = L32(b, 12);  \
+ a += b; d ^= a; d = L32(d, 8);   \
+ c += d; b ^= c; b = L32(b, 7); } 
+
+sv test_qr(void) {
+  u32  t[4] = {0x11111111,0x01020304,0x9b8d6f43,0x01234567};
+  t[0] += t[1]; t[3] ^= t[0]; t[3] = L32(t[3], 16);
+  t[2] += t[3]; t[1] ^= t[2]; t[1] = L32(t[1], 12);
+  t[0] += t[1]; t[3] ^= t[0]; t[3] = L32(t[3], 8);
+  t[2] += t[3]; t[1] ^= t[2]; t[1] = L32(t[1], 7); 
+  int i;
+  FOR(i,4) printf("%08x\n", t[i]);
+}
+
+static u32 ld32(const u8 *x)
+{
+  u32 u = x[3];
+  u = (u<<8)|x[2];
+  u = (u<<8)|x[1];
+  return (u<<8)|x[0];
+}
+sv st32(u8 *x,u32 u)
+{
+  int i;
+  FOR(i,4) { x[i] = u; u >>= 8; }
+}
+sv test_ccb(void) {
+  u32 w[16],x[16],y[16],t[4];
+  u8 out[64];
+  int i,j,m;
+
+  u8 c[16] = "expand 32-byte k";
+  u8 k[32]; FOR(i,32) k[i]=i;
+  u8 n[16] = "\x01\x00\x00\x00\x00\x00\x00\x09\x00\x00\x00\x4a\x00\x00\x00\x00";
+
+  FOR(i,4) {
+    x[i] = ld32(c+4*i);
+    x[4+i] = ld32(k+4*i);
+    x[8+i] = ld32(k+16+4*i);
+    x[12+i] = ld32(n+4*i);
+  }
+
+  FOR(i,16) y[i] = x[i];
+  printf("state setup\n");
+  FOR(m,4) {
+    printf("%08x %08x %08x %08x", x[4*m], x[4*m+1], x[4*m+2], x[4*m+3]);
+    printf("\n");
+  }
+  printf("\n");  
+
+
+  FOR(i,10) {
+    QR(x[0],x[4],x[8 ],x[12]);
+    QR(x[1],x[5],x[9 ],x[13]);
+    QR(x[2],x[6],x[10],x[14]);
+    QR(x[3],x[7],x[11],x[15]);
+    QR(x[0],x[5],x[10],x[15]);
+    QR(x[1],x[6],x[11],x[12]);
+    QR(x[2],x[7],x[8 ],x[13]);
+    QR(x[3],x[4],x[9 ],x[14]);
+  }
+
+  printf("end state\n");
+  FOR(m,4) {
+    printf("%08x %08x %08x %08x", x[4*m], x[4*m+1], x[4*m+2], x[4*m+3]);
+    printf("\n");
+  }
+  printf("\n");  
+
+  FOR(i,16) st32(out + 4 * i,x[i] + y[i]);
+
+  printf("out block\n");
+  FOR(i,16) {
+      printf("%02x%02x%02x%02x ", out[4*i], out[4*i+1], out[4*i+2], out[4*i+3]);
+  }
+}
+
 int main(int argc, char **argv) {
-  test_rfc7748_1();
-  test_rfc7748_2();
-  test_rfc7748_3();
+  //test_chacha20_1();
+  test_chacha20_2();
+  //test_ccb();
+  //test_rfc7748_1();
+  //test_rfc7748_2();
+  //test_rfc7748_3();
 }
